@@ -4,8 +4,10 @@ Acne vs Eczema Skin Disease Classifier
 Author : Your Name
 Course : GET 324 Mini Project
 
-This application uses AI to predicts whether
+This application uses AI to predict whether
 an uploaded skin image contains Acne or Eczema.
+
+Educational purposes only.
 """
 
 import io
@@ -14,7 +16,7 @@ import logging
 import os
 
 import numpy as np
-from flask import Flask, jsonify, render_template_string, request
+import streamlit as st
 from PIL import Image
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.models import load_model
@@ -31,135 +33,57 @@ CLASS_INDEX_PATH = os.path.join(APP_DIR, "class_indices.json")
 IMAGE_SIZE = (224, 224)
 CONFIDENCE_THRESHOLD = 0.60
 
-# ----------------------------------------------------
-# Flask App
-# ----------------------------------------------------
-
-app = Flask(__name__)
-
 logging.basicConfig(level=logging.INFO)
+
+# ----------------------------------------------------
+# Page Configuration
+# ----------------------------------------------------
+
+st.set_page_config(
+    page_title="Acne vs Eczema Classifier",
+    page_icon="🩺",
+    layout="centered",
+)
 
 # ----------------------------------------------------
 # Load Model
 # ----------------------------------------------------
 
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(
-        f"Model not found:\n{MODEL_PATH}\n"
-        "Please train the model before running the application."
-    )
 
-model = load_model(MODEL_PATH)
-logging.info("Model loaded successfully.")
+@st.cache_resource
+def load_classifier():
+
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"Model not found:\n{MODEL_PATH}")
+        st.stop()
+
+    model = load_model(MODEL_PATH)
+
+    logging.info("Model loaded successfully.")
+
+    return model
+
+
+model = load_classifier()
 
 # ----------------------------------------------------
 # Load Class Names
 # ----------------------------------------------------
 
 if os.path.exists(CLASS_INDEX_PATH):
+
     with open(CLASS_INDEX_PATH, "r") as file:
+
         class_indices = json.load(file)
+
 else:
+
     class_indices = {
         "acne": 0,
         "eczema": 1,
     }
 
-index_to_class = {value: key for key, value in class_indices.items()}
-
-# ----------------------------------------------------
-# HTML Template
-# ----------------------------------------------------
-
-INDEX_HTML = """
-<!DOCTYPE html>
-
-<html>
-<head>
-
-<title>Acne vs Eczema Classifier</title>
-
-<style>
-
-body{
-font-family:Arial;
-max-width:600px;
-margin:40px auto;
-padding:20px;
-background:#f7f7f7;
-}
-
-.card{
-background:white;
-padding:25px;
-border-radius:10px;
-box-shadow:0 2px 8px rgba(0,0,0,.15);
-}
-
-.result{
-margin-top:20px;
-padding:15px;
-background:#eef;
-border-radius:8px;
-}
-
-.warning{
-color:#d97706;
-font-size:14px;
-}
-
-button{
-padding:10px 18px;
-margin-top:10px;
-cursor:pointer;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<h2>Acne vs Eczema Classifier</h2>
-
-<p class="warning">
-Educational purpose only. This application is NOT a medical diagnosis tool.
-Consult a qualified dermatologist for medical advice.
-</p>
-
-<form action="/predict" method="POST" enctype="multipart/form-data">
-
-<input type="file" name="image" accept="image/*" required>
-
-<br><br>
-
-<button type="submit">
-Predict
-</button>
-
-</form>
-
-{% if result %}
-
-<div class="result">
-
-<h3>Prediction Result</h3>
-
-<p><strong>Prediction:</strong> {{ result.label }}</p>
-
-</div>
-
-{% endif %}
-
-</div>
-
-</body>
-
-</html>
-
-"""
+index_to_class = {v: k for k, v in class_indices.items()}
 
 # ----------------------------------------------------
 # Image Preprocessing
@@ -167,117 +91,128 @@ Predict
 
 
 def preprocess_image(image_bytes):
-    """
-    Converts an uploaded image into a MobileNetV2-compatible tensor.
-    """
 
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
     image = image.resize(IMAGE_SIZE)
 
-    image_array = np.asarray(image, dtype=np.float32)
+    image = np.asarray(image, dtype=np.float32)
 
-    image_array = preprocess_input(image_array)
+    image = preprocess_input(image)
 
-    image_array = np.expand_dims(image_array, axis=0)
+    image = np.expand_dims(image, axis=0)
 
-    return image_array
+    return image
 
 
 # ----------------------------------------------------
-# Prediction Function
+# Prediction
 # ----------------------------------------------------
 
 
 def predict_image(image_bytes):
-    """
-    Runs inference on the uploaded image.
-    """
 
-    processed_image = preprocess_image(image_bytes)
+    processed = preprocess_image(image_bytes)
 
-    probability = float(model.predict(processed_image, verbose=0)[0][0])
+    probability = float(model.predict(processed, verbose=0)[0][0])
 
-    acne_label = index_to_class.get(0, "Acne")
-    eczema_label = index_to_class.get(1, "Eczema")
+    acne_label = index_to_class.get(0, "Acne").title()
+    eczema_label = index_to_class.get(1, "Eczema").title()
 
     if probability >= 0.5:
-        predicted_label = eczema_label
+
+        label = eczema_label
+        confidence = probability
+
     else:
-        predicted_label = acne_label
+
+        label = acne_label
         confidence = 1 - probability
 
     if confidence < CONFIDENCE_THRESHOLD:
-        predicted_label = "Uncertain"
+
+        label = "Uncertain"
 
     return {
-        "label": predicted_label,
+        "label": label,
+        "confidence": confidence,
+        "probability": probability,
     }
 
 
 # ----------------------------------------------------
-# Routes
+# User Interface
 # ----------------------------------------------------
 
+st.title("🩺 Acne vs Eczema Skin Disease Classifier")
 
-@app.route("/")
-def home():
-    return render_template_string(INDEX_HTML, result=None)
-
-
-@app.route("/predict", methods=["POST"])
-def predict():
-
-    if "image" not in request.files:
-        return jsonify({"error": "Image file is required."}), 400
-
-    uploaded_file = request.files["image"]
-
-    if uploaded_file.filename == "":
-        return jsonify({"error": "No image selected."}), 400
-
-    try:
-
-        image_bytes = uploaded_file.read()
-
-        prediction = predict_image(image_bytes)
-
-    except Exception as error:
-
-        logging.exception(error)
-
-        return jsonify({
-            "error": "Unable to process the uploaded image."
-        }), 500
-
-    if request.accept_mimetypes.accept_html and not request.is_json:
-        return render_template_string(
-            INDEX_HTML,
-            result=prediction
-        )
-
-    return jsonify(prediction)
-
-
-@app.route("/health")
-def health():
+st.info(
     """
-    Health check endpoint.
-    """
+This AI application predicts whether a skin image is more likely to
+contain **Acne** or **Eczema**.
 
-    return jsonify({
-        "status": "OK",
-        "model_loaded": True
-    })
+⚠️ **Educational purposes only.**
+This is **NOT** a medical diagnosis tool.
+Always consult a qualified dermatologist.
+"""
+)
 
+uploaded_file = st.file_uploader(
+    "Upload a skin image",
+    type=["jpg", "jpeg", "png"],
+)
 
-# ----------------------------------------------------
-# Main
-# ----------------------------------------------------
+if uploaded_file is not None:
 
-if __name__ == "__main__":
+    image = Image.open(uploaded_file)
 
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True,
+    st.image(
+        image,
+        caption="Uploaded Image",
+        use_column_width=True,
     )
+
+    with st.spinner("Analyzing image..."):
+
+        try:
+
+            image_bytes = uploaded_file.getvalue()
+
+            result = predict_image(image_bytes)
+
+            st.subheader("Prediction Result")
+
+            if result["label"] == "Uncertain":
+
+                st.warning(
+                    "The model is not confident enough to make a prediction."
+                )
+
+            elif result["label"].lower() == "acne":
+
+                st.success("🟢 Acne Detected")
+
+            else:
+
+                st.success("🟠 Eczema Detected")
+
+            st.metric(
+                "Confidence",
+                f"{result['confidence'] * 100:.2f}%"
+            )
+
+        except Exception as e:
+
+            logging.exception(e)
+
+            st.error(
+                "An error occurred while processing the uploaded image."
+            )
+# ----------------------------------------------------
+# Footer
+# ----------------------------------------------------
+
+st.markdown("---")
+st.caption(
+    "Developed using TensorFlow, MobileNetV2, and Streamlit."
+)
